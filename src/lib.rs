@@ -6,8 +6,14 @@
 //! WorkTable backend. Its purpose is to make the baseline a named component
 //! with a stable contract so database comparisons use identical rows.
 
-use std::collections::BTreeMap;
+#![no_std]
 
+extern crate alloc;
+
+use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
+
+#[cfg(feature = "arctic")]
 use arctic::{ConcurrentMap, Key};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -82,13 +88,15 @@ pub struct IndexedTable<K, V> {
 /// The row payload stays byte-for-byte the same as [`IndexedTable`]. Arctic
 /// holds only `K -> u64 row offset`, so an A/B attributes the difference to
 /// the index rather than to a different row representation.
+#[cfg(feature = "arctic")]
 pub struct ArcticTable<K: Key, V> {
     rows: Vec<(K, V)>,
     primary: ConcurrentMap<K, u64>,
 }
 
-impl<K: Key, V> std::fmt::Debug for ArcticTable<K, V> {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+#[cfg(feature = "arctic")]
+impl<K: Key, V> core::fmt::Debug for ArcticTable<K, V> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("ArcticTable")
             .field("rows", &self.rows.len())
@@ -96,12 +104,14 @@ impl<K: Key, V> std::fmt::Debug for ArcticTable<K, V> {
     }
 }
 
+#[cfg(feature = "arctic")]
 impl<K: Key, V> Default for ArcticTable<K, V> {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[cfg(feature = "arctic")]
 impl<K: Key, V> ArcticTable<K, V> {
     pub fn new() -> Self {
         Self {
@@ -202,18 +212,14 @@ mod tests {
     fn linear_and_indexed_tables_have_the_same_row_contract() {
         let mut linear = LinearTable::new();
         let mut indexed = IndexedTable::new();
-        let mut arctic = ArcticTable::new();
         for (key, value) in [(7_u64, "a"), (2, "b"), (11, "c")] {
             linear.insert(key, value).unwrap();
             indexed.insert(key, value).unwrap();
-            arctic.insert(key, value).unwrap();
         }
 
         assert_eq!(linear.rows(), indexed.rows());
-        assert_eq!(linear.rows(), arctic.rows());
         for key in [2_u64, 7, 11, 99] {
             assert_eq!(linear.select(&key), indexed.select(&key));
-            assert_eq!(linear.select(&key), arctic.select(&key));
         }
         assert_eq!(
             linear.insert(7, "duplicate"),
@@ -223,6 +229,22 @@ mod tests {
             indexed.insert(7, "duplicate"),
             Err(InsertError::DuplicateKey(7_u64))
         );
+    }
+
+    #[cfg(feature = "arctic")]
+    #[test]
+    fn arctic_table_has_the_same_row_contract() {
+        let mut linear = LinearTable::new();
+        let mut arctic = ArcticTable::new();
+        for (key, value) in [(7_u64, "a"), (2, "b"), (11, "c")] {
+            linear.insert(key, value).unwrap();
+            arctic.insert(key, value).unwrap();
+        }
+
+        assert_eq!(linear.rows(), arctic.rows());
+        for key in [2_u64, 7, 11, 99] {
+            assert_eq!(linear.select(&key), arctic.select(&key));
+        }
         assert_eq!(
             arctic.insert(7, "duplicate"),
             Err(InsertError::DuplicateKey(7_u64))

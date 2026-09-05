@@ -8,7 +8,15 @@ a database. This crate isolates those choices behind one row contract:
 
 - `LinearTable`: ordered `Vec<(K, V)>` with linear point lookup;
 - `IndexedTable`: the same ordered rows plus `BTreeMap<K, row_offset>`;
-- `ArcticTable`: the same ordered rows plus Arctic `K -> row_offset`.
+- `ArcticTable`: the same ordered rows plus Arctic `K -> row_offset`, behind
+  the optional `arctic` feature.
+
+The default crate is `#![no_std]` and uses only `alloc`. Enable Arctic when a
+runtime with its synchronization support is available:
+
+```toml
+worktable-vec = { version = "^0.1", features = ["arctic"] }
+```
 
 It is deliberately not a persistence engine and does not claim the generated
 schema, queries, concurrency, version publication, or durability of WorkTable.
