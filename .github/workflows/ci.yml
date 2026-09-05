@@ -21,3 +21,5 @@ jobs:
       - run: cargo check --lib --no-default-features --target thumbv7em-none-eabihf
       - run: cargo clippy --all-targets --features arctic -- -D warnings
       - run: cargo test --all-targets --features arctic
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo test --all-targets --all-features
