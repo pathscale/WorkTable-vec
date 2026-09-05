@@ -1,0 +1,14 @@
+[package]
+name = "worktable-vec"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+description = "Explicit Vec-backed baselines for WorkTable workloads"
+repository = "https://github.com/pathscale/WorkTable-vec"
+readme = "README.md"
+keywords = ["worktable", "vec", "arctic", "benchmark"]
+categories = ["data-structures"]
+
+[dependencies]
+arctic = { package = "arctic-wt", version = "^0.1" }
