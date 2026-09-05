@@ -13,6 +13,10 @@ categories = ["data-structures"]
 [features]
 default = []
 arctic = ["dep:arctic"]
+congee = ["dep:congee"]
+wti = ["dep:wti"]
 
 [dependencies]
 arctic = { package = "arctic-wt", version = "^0.1, >=0.1.9", optional = true }
+congee = { package = "congee-wt", version = "^0.4, >=0.4.4", optional = true }
+wti = { package = "WorkTablesIndex", version = "^0.0, >=0.0.11", optional = true, default-features = false, features = ["concurrent"] }

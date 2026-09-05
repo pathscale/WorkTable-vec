@@ -10,6 +10,11 @@ a database. This crate isolates those choices behind one row contract:
 - `IndexedTable`: the same ordered rows plus `BTreeMap<K, row_offset>`;
 - `ArcticTable`: the same ordered rows plus Arctic `K -> row_offset`, behind
   the optional `arctic` feature.
+- `CongeeTable`: the same ordered rows plus Congee `K -> row_offset`, behind
+  the optional `congee` feature and limited to keys that round-trip through
+  `usize`.
+- `WtiTable`: the same ordered rows plus WorkTablesIndex `K -> row_offset`,
+  behind the optional `wti` feature.
 
 The default crate is `#![no_std]` and uses only `alloc`. Enable Arctic when a
 runtime with its synchronization support is available:
@@ -17,6 +22,14 @@ runtime with its synchronization support is available:
 ```toml
 worktable-vec = { version = "^0.1", features = ["arctic"] }
 ```
+
+Use `features = ["congee"]` for fixed-width Congee keys, or enable both to
+compare the two indexes over the identical Vec row representation.
+
+The default `VecTable`/`LinearTable` is one `Vec<(K, V)>` field. Its `push`,
+row-offset access, slices, iteration, capacity, reserve, and `into_rows` paths
+retain ordinary Vec behavior and storage. `insert` is the explicitly stronger
+operation: it performs an O(n) uniqueness check before appending.
 
 It is deliberately not a persistence engine and does not claim the generated
 schema, queries, concurrency, version publication, or durability of WorkTable.
