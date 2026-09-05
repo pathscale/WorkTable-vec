@@ -586,7 +586,7 @@ mod tests {
 /// # What it does not do
 ///
 /// No removal, no resize, and no iteration order beyond slot order. A full table refuses rather
-/// than growing, and [`AtomicKeyTable::claimed`] says how many slots are taken so a caller can
+/// than growing, and [`AtomicKeyTable::len`] says how many slots are taken so a caller can
 /// see it coming. Keys are `u64` and zero is the empty sentinel, so a caller whose key is a
 /// pointer or a hash maps it in. `usize` rather than `u64` because `AtomicU64` does not exist
 /// on 32-bit bare-metal targets such as `thumbv7em-none-eabi`, and this crate builds for them.
@@ -648,9 +648,14 @@ impl<V: Default> AtomicKeyTable<V> {
 impl<V> AtomicKeyTable<V> {
     /// The row for this key, claiming a slot if it has none yet.
     ///
+    /// Named for `WorkTable`'s `upsert`: it returns the existing row or creates one, and never
+    /// replaces what is there. The row is then updated through `&V`, which is where the
+    /// difference from a `WorkTable` upsert lies - the value carries its own interior mutability
+    /// rather than being written back whole.
+    ///
     /// `None` means the table is full. Zero is the empty sentinel and is rejected rather than
     /// silently colliding with an unclaimed slot.
-    pub fn find_or_claim(&self, key: usize) -> Option<&V> {
+    pub fn upsert(&self, key: usize) -> Option<&V> {
         if key == 0 || self.keys.is_empty() {
             return None;
         }
@@ -677,8 +682,11 @@ impl<V> AtomicKeyTable<V> {
         None
     }
 
-    /// The row for this key, or `None` if nothing has claimed it. Never claims.
-    pub fn find(&self, key: usize) -> Option<&V> {
+    /// The row for this key, or `None` if no row has been created for it. Never creates one.
+    ///
+    /// The same name and shape as [`LinearTable::select`], so a caller moving between the two
+    /// tables in this crate reads one vocabulary.
+    pub fn select(&self, key: usize) -> Option<&V> {
         if key == 0 || self.keys.is_empty() {
             return None;
         }
@@ -707,12 +715,17 @@ impl<V> AtomicKeyTable<V> {
             )
     }
 
-    /// How many slots hold a key.
-    pub fn claimed(&self) -> usize {
+    /// How many rows the table holds.
+    pub fn len(&self) -> usize {
         self.iter().count()
     }
 
-    /// How many slots there are.
+    /// Whether any row has been created. Matches [`LinearTable::is_empty`].
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// How many rows the table can hold. Fixed at construction.
     pub fn capacity(&self) -> usize {
         self.keys.len()
     }
@@ -729,52 +742,49 @@ mod atomic_key_table_tests {
     #[test]
     fn a_claimed_row_is_found_by_a_plain_load_and_never_reclaimed() {
         let table: AtomicKeyTable<Counter> = AtomicKeyTable::with_capacity(64);
-        let first = table.find_or_claim(7).expect("capacity");
+        let first = table.upsert(7).expect("capacity");
         first.0.fetch_add(1, Ordering::Relaxed);
-        let again = table.find_or_claim(7).expect("already claimed");
+        let again = table.upsert(7).expect("already claimed");
         again.0.fetch_add(1, Ordering::Relaxed);
         assert_eq!(
             again.0.load(Ordering::Relaxed),
             2,
             "the second call found the same row"
         );
-        assert_eq!(table.claimed(), 1, "one key claimed one slot");
+        assert_eq!(table.len(), 1, "one key claimed one slot");
     }
 
     #[test]
     fn zero_is_the_empty_sentinel_and_is_refused_rather_than_colliding() {
         let table: AtomicKeyTable<Counter> = AtomicKeyTable::with_capacity(8);
         assert!(
-            table.find_or_claim(0).is_none(),
+            table.upsert(0).is_none(),
             "zero would be indistinguishable from empty"
         );
-        assert_eq!(table.claimed(), 0);
+        assert_eq!(table.len(), 0);
     }
 
     #[test]
     fn a_full_table_refuses_rather_than_growing() {
         let table: AtomicKeyTable<Counter> = AtomicKeyTable::with_capacity(4);
         for key in 1..=4 {
-            assert!(table.find_or_claim(key).is_some(), "slot {key} fits");
+            assert!(table.upsert(key).is_some(), "slot {key} fits");
         }
-        assert_eq!(table.claimed(), 4);
+        assert_eq!(table.len(), 4);
+        assert!(table.upsert(5).is_none(), "the fifth has nowhere to go");
         assert!(
-            table.find_or_claim(5).is_none(),
-            "the fifth has nowhere to go"
-        );
-        assert!(
-            table.find_or_claim(3).is_some(),
+            table.upsert(3).is_some(),
             "a claimed key is still reachable when full"
         );
     }
 
     #[test]
-    fn find_never_claims() {
+    fn select_never_creates_a_row() {
         let table: AtomicKeyTable<Counter> = AtomicKeyTable::with_capacity(8);
-        assert!(table.find(9).is_none());
-        assert_eq!(table.claimed(), 0, "find must not take a slot");
-        table.find_or_claim(9).expect("capacity");
-        assert!(table.find(9).is_some());
+        assert!(table.select(9).is_none());
+        assert_eq!(table.len(), 0, "find must not take a slot");
+        table.upsert(9).expect("capacity");
+        assert!(table.select(9).is_some());
     }
 
     #[test]
@@ -782,7 +792,7 @@ mod atomic_key_table_tests {
         let table: AtomicKeyTable<Counter> = AtomicKeyTable::with_capacity(32);
         for key in [11usize, 22, 33] {
             table
-                .find_or_claim(key)
+                .upsert(key)
                 .expect("capacity")
                 .0
                 .store(key as u64, Ordering::Relaxed);
@@ -806,7 +816,7 @@ mod atomic_key_table_tests {
                     for round in 0..1_000usize {
                         let key = (round % 16) + 1;
                         shared
-                            .find_or_claim(key)
+                            .upsert(key)
                             .expect("capacity")
                             .0
                             .fetch_add(1, Ordering::Relaxed);
@@ -815,7 +825,7 @@ mod atomic_key_table_tests {
             }
         });
         assert_eq!(
-            table.claimed(),
+            table.len(),
             16,
             "sixteen keys, sixteen slots, whatever the interleaving"
         );
@@ -855,7 +865,7 @@ mod atomic_key_table_cost {
         let atomic: AtomicKeyTable<Counter> = AtomicKeyTable::with_capacity(KEYS * 4);
         let mut linear: LinearTable<usize, u64> = LinearTable::new();
         for key in 1..=KEYS {
-            atomic.find_or_claim(key).expect("capacity");
+            atomic.upsert(key).expect("capacity");
             linear.push(key, key as u64);
         }
 
@@ -863,7 +873,11 @@ mod atomic_key_table_cost {
         let mut sink = 0u64;
         for round in 0..ROUNDS {
             let key = (round % KEYS) + 1;
-            sink += atomic.find(key).expect("claimed").0.load(Ordering::Relaxed);
+            sink += atomic
+                .select(key)
+                .expect("claimed")
+                .0
+                .load(Ordering::Relaxed);
         }
         let atomic_ns = start.elapsed().as_nanos().max(1);
 
