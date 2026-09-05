@@ -23,3 +23,29 @@ jobs:
       - run: cargo test --all-targets --features arctic
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test --all-targets --all-features
+
+  package:
+    name: Release dry run
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo publish --dry-run
+
+  publish:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    needs: [test, package]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Publish when master carries a new version
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          version=$(sed -nE 's/^version = "([^"]+)"$/\1/p' Cargo.toml | head -1)
+          if cargo info "worktable-vec@$version" --registry crates-io >/dev/null 2>&1; then
+            echo "worktable-vec $version is already on crates.io; nothing to publish"
+            exit 0
+          fi
+          cargo publish
