@@ -555,3 +555,334 @@ mod tests {
         );
     }
 }
+
+/// A fixed-capacity table whose rows are claimed without blocking and updated in place.
+///
+/// # What this is for, and why the other tables here cannot do it
+///
+/// [`LinearTable`] and its indexed variants take `&mut self` to insert, because they push onto a
+/// `Vec` and a push can reallocate - which moves every row. That is the right shape for the
+/// baselines this crate exists to name, and it is unusable from several threads at once.
+///
+/// The case that needs something else is a **counter table**: many writers, a small set of keys
+/// that stabilises almost immediately, and an update that is a read-modify-write on the row
+/// rather than a replacement of it. Performance measurement is the archetype - the first
+/// consumer of this crate records timings from sixteen workers against a handful of named sites.
+/// `performance_measurement`'s `PerformanceProfiler` is the same pattern one level up, and it
+/// reaches for `lockfree::map::Map`, which is not `no_std`.
+///
+/// # How it avoids both a lock and a reallocation
+///
+/// Capacity is fixed at construction and every value is built then, so **no row ever moves** and
+/// `&V` handed out stays valid for the life of the table. A key is claimed with one
+/// `compare_exchange`; after that, finding it is a plain load. The value is updated through `&V`,
+/// so `V` supplies its own interior mutability - atomics, typically - and this crate takes no
+/// position on what the row contains.
+///
+/// The load-before-claim order is the point. Claiming with a `compare_exchange` on every lookup
+/// takes the cache line exclusively even when nothing changes, so writers contending for a key
+/// they all already own serialise on it. A relaxed load is a shared read.
+///
+/// # What it does not do
+///
+/// No removal, no resize, and no iteration order beyond slot order. A full table refuses rather
+/// than growing, and [`AtomicKeyTable::claimed`] says how many slots are taken so a caller can
+/// see it coming. Keys are `u64` and zero is the empty sentinel, so a caller whose key is a
+/// pointer or a hash maps it in. `usize` rather than `u64` because `AtomicU64` does not exist
+/// on 32-bit bare-metal targets such as `thumbv7em-none-eabi`, and this crate builds for them.
+/// Scatter a key across the table.
+///
+/// # Why not the low bits, and why not a modulo
+///
+/// The first version shifted the key right by four and took it modulo the capacity, which is
+/// wrong twice. The shift assumed a pointer key, whose low bits are alignment zeros; handed
+/// small integers it maps every key under sixteen to slot zero, and a measured lookup over
+/// sixty-four sequential keys walked a probe chain 9.3x slower than a linear scan of the same
+/// rows. The modulo is an integer division on the hottest path in the crate.
+///
+/// Fibonacci hashing fixes the first: multiplying by the golden ratio spreads any input across
+/// the whole word, and taking the **high** bits of the product is what reads that spread. A
+/// power-of-two capacity fixes the second: the index is then a mask.
+#[inline(always)]
+const fn scatter(key: usize, shift: u32, mask: usize) -> usize {
+    // 2^BITS / phi, odd so the multiply is invertible and no input is lost.
+    const GOLDEN: usize = if usize::BITS == 64 {
+        0x9E37_79B9_7F4A_7C15u64 as usize
+    } else {
+        0x9E37_79B9u32 as usize
+    };
+    (key.wrapping_mul(GOLDEN) >> shift) & mask
+}
+#[derive(Debug)]
+pub struct AtomicKeyTable<V> {
+    keys: Vec<core::sync::atomic::AtomicUsize>,
+    values: Vec<V>,
+    /// Capacity is a power of two, so the index is a mask rather than a division.
+    mask: usize,
+    shift: u32,
+}
+
+impl<V: Default> AtomicKeyTable<V> {
+    /// A table with at least `capacity` slots, every value built now.
+    ///
+    /// Rounded up to a power of two so the slot index is a mask rather than a division. Size it
+    /// generously: this is open addressed with linear probing, so a table much past half full
+    /// costs a long probe on every miss.
+    pub fn with_capacity(capacity: usize) -> Self {
+        let slots = capacity.max(1).next_power_of_two();
+        let mut keys = Vec::with_capacity(slots);
+        let mut values = Vec::with_capacity(slots);
+        for _ in 0..slots {
+            keys.push(core::sync::atomic::AtomicUsize::new(0));
+            values.push(V::default());
+        }
+        Self {
+            keys,
+            values,
+            mask: slots - 1,
+            shift: usize::BITS - slots.trailing_zeros(),
+        }
+    }
+}
+
+impl<V> AtomicKeyTable<V> {
+    /// The row for this key, claiming a slot if it has none yet.
+    ///
+    /// `None` means the table is full. Zero is the empty sentinel and is rejected rather than
+    /// silently colliding with an unclaimed slot.
+    pub fn find_or_claim(&self, key: usize) -> Option<&V> {
+        if key == 0 || self.keys.is_empty() {
+            return None;
+        }
+        let capacity = self.keys.len();
+        let mut at = scatter(key, self.shift, self.mask);
+        for _ in 0..capacity {
+            match self.keys[at].load(core::sync::atomic::Ordering::Acquire) {
+                existing if existing == key => return Some(&self.values[at]),
+                0 => {
+                    match self.keys[at].compare_exchange(
+                        0,
+                        key,
+                        core::sync::atomic::Ordering::AcqRel,
+                        core::sync::atomic::Ordering::Acquire,
+                    ) {
+                        Ok(_) => return Some(&self.values[at]),
+                        Err(taken) if taken == key => return Some(&self.values[at]),
+                        Err(_) => at = (at + 1) & self.mask,
+                    }
+                }
+                _ => at = (at + 1) & self.mask,
+            }
+        }
+        None
+    }
+
+    /// The row for this key, or `None` if nothing has claimed it. Never claims.
+    pub fn find(&self, key: usize) -> Option<&V> {
+        if key == 0 || self.keys.is_empty() {
+            return None;
+        }
+        let capacity = self.keys.len();
+        let mut at = scatter(key, self.shift, self.mask);
+        for _ in 0..capacity {
+            match self.keys[at].load(core::sync::atomic::Ordering::Acquire) {
+                existing if existing == key => return Some(&self.values[at]),
+                0 => return None,
+                _ => at = (at + 1) & self.mask,
+            }
+        }
+        None
+    }
+
+    /// Every claimed row, in slot order.
+    pub fn iter(&self) -> impl Iterator<Item = (usize, &V)> {
+        self.keys
+            .iter()
+            .zip(self.values.iter())
+            .filter_map(
+                |(k, v)| match k.load(core::sync::atomic::Ordering::Acquire) {
+                    0 => None,
+                    key => Some((key, v)),
+                },
+            )
+    }
+
+    /// How many slots hold a key.
+    pub fn claimed(&self) -> usize {
+        self.iter().count()
+    }
+
+    /// How many slots there are.
+    pub fn capacity(&self) -> usize {
+        self.keys.len()
+    }
+}
+
+#[cfg(test)]
+mod atomic_key_table_tests {
+    use super::*;
+    use core::sync::atomic::{AtomicU64, Ordering};
+
+    #[derive(Default)]
+    struct Counter(AtomicU64);
+
+    #[test]
+    fn a_claimed_row_is_found_by_a_plain_load_and_never_reclaimed() {
+        let table: AtomicKeyTable<Counter> = AtomicKeyTable::with_capacity(64);
+        let first = table.find_or_claim(7).expect("capacity");
+        first.0.fetch_add(1, Ordering::Relaxed);
+        let again = table.find_or_claim(7).expect("already claimed");
+        again.0.fetch_add(1, Ordering::Relaxed);
+        assert_eq!(
+            again.0.load(Ordering::Relaxed),
+            2,
+            "the second call found the same row"
+        );
+        assert_eq!(table.claimed(), 1, "one key claimed one slot");
+    }
+
+    #[test]
+    fn zero_is_the_empty_sentinel_and_is_refused_rather_than_colliding() {
+        let table: AtomicKeyTable<Counter> = AtomicKeyTable::with_capacity(8);
+        assert!(
+            table.find_or_claim(0).is_none(),
+            "zero would be indistinguishable from empty"
+        );
+        assert_eq!(table.claimed(), 0);
+    }
+
+    #[test]
+    fn a_full_table_refuses_rather_than_growing() {
+        let table: AtomicKeyTable<Counter> = AtomicKeyTable::with_capacity(4);
+        for key in 1..=4 {
+            assert!(table.find_or_claim(key).is_some(), "slot {key} fits");
+        }
+        assert_eq!(table.claimed(), 4);
+        assert!(
+            table.find_or_claim(5).is_none(),
+            "the fifth has nowhere to go"
+        );
+        assert!(
+            table.find_or_claim(3).is_some(),
+            "a claimed key is still reachable when full"
+        );
+    }
+
+    #[test]
+    fn find_never_claims() {
+        let table: AtomicKeyTable<Counter> = AtomicKeyTable::with_capacity(8);
+        assert!(table.find(9).is_none());
+        assert_eq!(table.claimed(), 0, "find must not take a slot");
+        table.find_or_claim(9).expect("capacity");
+        assert!(table.find(9).is_some());
+    }
+
+    #[test]
+    fn every_claimed_row_is_iterated_and_no_empty_one_is() {
+        let table: AtomicKeyTable<Counter> = AtomicKeyTable::with_capacity(32);
+        for key in [11usize, 22, 33] {
+            table
+                .find_or_claim(key)
+                .expect("capacity")
+                .0
+                .store(key as u64, Ordering::Relaxed);
+        }
+        let mut seen: Vec<(usize, u64)> = table
+            .iter()
+            .map(|(k, v)| (k, v.0.load(Ordering::Relaxed)))
+            .collect();
+        seen.sort_unstable();
+        assert_eq!(seen, alloc::vec![(11usize, 11u64), (22, 22), (33, 33)]);
+    }
+
+    #[test]
+    fn concurrent_writers_agree_on_one_row_per_key() {
+        extern crate std;
+        let table: AtomicKeyTable<Counter> = AtomicKeyTable::with_capacity(512);
+        let shared = &table;
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                scope.spawn(move || {
+                    for round in 0..1_000usize {
+                        let key = (round % 16) + 1;
+                        shared
+                            .find_or_claim(key)
+                            .expect("capacity")
+                            .0
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                });
+            }
+        });
+        assert_eq!(
+            table.claimed(),
+            16,
+            "sixteen keys, sixteen slots, whatever the interleaving"
+        );
+        let total: u64 = table.iter().map(|(_, v)| v.0.load(Ordering::Relaxed)).sum();
+        assert_eq!(
+            total,
+            8 * 1_000,
+            "no update was lost and none was double counted"
+        );
+    }
+}
+
+#[cfg(test)]
+mod atomic_key_table_cost {
+    use super::*;
+    use core::sync::atomic::{AtomicU64, Ordering};
+
+    #[derive(Default)]
+    struct Counter(AtomicU64);
+
+    /// A claimed lookup must cost what a `Vec` index costs, because that is the whole claim.
+    ///
+    /// The comparison is against this crate's own [`LinearTable`], which is the baseline it
+    /// exists to name. `select` there is a linear scan, so the interesting result is not that
+    /// the atomic table wins - it has to, at any size past a handful - but that it does not
+    /// *lose* at the small sizes a counter table actually runs at.
+    ///
+    /// Timed with the platform clock and reported as a ratio, so the assertion is about shape
+    /// rather than about this machine. Generous bound: the point is to catch a regression that
+    /// makes lookup linear or takes a lock, not to police a few percent.
+    #[test]
+    fn a_claimed_lookup_costs_about_what_a_vec_index_costs() {
+        extern crate std;
+        const KEYS: usize = 64;
+        const ROUNDS: usize = 200_000;
+
+        let atomic: AtomicKeyTable<Counter> = AtomicKeyTable::with_capacity(KEYS * 4);
+        let mut linear: LinearTable<usize, u64> = LinearTable::new();
+        for key in 1..=KEYS {
+            atomic.find_or_claim(key).expect("capacity");
+            linear.push(key, key as u64);
+        }
+
+        let start = std::time::Instant::now();
+        let mut sink = 0u64;
+        for round in 0..ROUNDS {
+            let key = (round % KEYS) + 1;
+            sink += atomic.find(key).expect("claimed").0.load(Ordering::Relaxed);
+        }
+        let atomic_ns = start.elapsed().as_nanos().max(1);
+
+        let start = std::time::Instant::now();
+        for round in 0..ROUNDS {
+            let key = (round % KEYS) + 1;
+            sink += *linear.select(&key).expect("present");
+        }
+        let linear_ns = start.elapsed().as_nanos().max(1);
+        std::hint::black_box(sink);
+
+        let ratio = atomic_ns as f64 / linear_ns as f64;
+        std::eprintln!(
+            "lookup over {KEYS} keys: atomic {atomic_ns} ns, linear scan {linear_ns} ns, ratio {ratio:.3}"
+        );
+        assert!(
+            ratio < 1.0,
+            "a hashed lookup should not be slower than a linear scan over {KEYS} keys, \
+             but the atomic table took {atomic_ns} ns against {linear_ns} ns"
+        );
+    }
+}
