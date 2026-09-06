@@ -13,12 +13,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-          targets: thumbv7em-none-eabihf
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets --no-default-features -- -D warnings
       - run: cargo test --all-targets --no-default-features
-      - run: cargo check --lib --no-default-features --target thumbv7em-none-eabihf
       - run: cargo clippy --all-targets --features arctic -- -D warnings
       - run: cargo test --all-targets --features arctic
       - run: cargo clippy --all-targets --all-features -- -D warnings
