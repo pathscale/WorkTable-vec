@@ -2,20 +2,14 @@
 //!
 //! # The interface
 //!
-//! Everything is a load or an unload, because what the two ends do is hydrate
-//! a `Vec` and dehydrate it. `_to` and `_from` say where.
-//!
 //! ```ignore
-//! table.unload_to(&mut sink)?;              // rows out, as pages
-//! let table = LinearTable::load_from(&mut source)?;  // rows back into a Vec
-//! table.append_to(&mut sink, from_row)?;    // more pages, no rewrite
+//! table.flush("rows.wtv")?;                   // write it
+//! let table = LinearTable::open("rows.wtv")?; // read it back
+//! table.append("rows.wtv", from_row)?;        // add rows without a rewrite
 //! ```
 //!
-//! The sink and the source are `embedded_io` traits, so a `std::fs::File`
-//! wrapped in an adapter is a real file and a `Vec<u8>` is memory, with no
-//! second code path and no `std` in this crate.
-//!
-//! When the bytes are already in hand there is no I/O to do:
+//! and the same thing without a filesystem, for callers that already hold the
+//! bytes or do not have one:
 //!
 //! ```ignore
 //! let bytes = table.unload();
@@ -23,8 +17,8 @@
 //! ```
 //!
 //! Rows live in a `Vec` while the table is in use and are pages only at rest.
-//! Everything between a load and an unload runs at `Vec` speed because it *is*
-//! a `Vec`. This is a codec plus a byte sink, not a storage engine underneath.
+//! Everything between an open and a flush runs at `Vec` speed because it *is* a
+//! `Vec`. This is a codec plus a file, not a storage engine underneath.
 //!
 //! # Page based, and each page stands alone
 //!
@@ -507,7 +501,7 @@ where
     let mut schema = None;
     let mut rows = Vec::new();
     for (index, raw) in bytes.chunks_exact(PAGE_SIZE).enumerate() {
-        rows.append(&mut page_rows(raw, index, &mut schema)?);
+        rows.append_to(&mut page_rows(raw, index, &mut schema)?);
     }
     let expected = fingerprint::<Vec<(K, V)>>();
     match schema {

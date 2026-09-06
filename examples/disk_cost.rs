@@ -29,14 +29,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let now = Instant::now();
         {
             let file = std::fs::File::create(&path)?;
-            table.write(&mut FromStd::new(file))?;
+            table.unload_to(&mut FromStd::new(file))?;
         }
         wrote.push(now.elapsed());
         bytes = std::fs::metadata(&path)?.len();
 
         let now = Instant::now();
-        let back = LinearTable::<u64, String>::read(&mut FromStd::new(std::fs::File::open(&path)?))
-            .map_err(|error| format!("{error}"))?;
+        let back =
+            LinearTable::<u64, String>::load_from(&mut FromStd::new(std::fs::File::open(&path)?))
+                .map_err(|error| format!("{error}"))?;
         read.push(now.elapsed());
         assert_eq!(back.len(), ROWS);
     }

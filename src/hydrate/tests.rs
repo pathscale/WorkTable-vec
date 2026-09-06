@@ -154,7 +154,7 @@ fn appended_pages_read_back_as_one_table() {
         first.push(key, value);
     }
     bytes.extend_from_slice(&first.unload());
-    bytes.extend_from_slice(&whole.unload_from(2_000));
+    bytes.extend_from_slice(&whole.unload_appending(2_000));
 
     let back = LinearTable::<u64, String>::load(&bytes).expect("a load");
     assert_eq!(back.rows(), whole.rows());
@@ -170,8 +170,8 @@ mod through_a_reader_and_a_writer {
     fn memory_needs_no_adapter() {
         let before = table(3_000);
         let mut sink = Vec::new();
-        before.write(&mut sink).expect("a write");
-        let back = LinearTable::<u64, String>::read(&mut sink.as_slice()).expect("a read");
+        before.unload_to(&mut sink).expect("a write");
+        let back = LinearTable::<u64, String>::load_from(&mut sink.as_slice()).expect("a read");
         assert_eq!(back.rows(), before.rows());
     }
 
@@ -190,7 +190,7 @@ mod through_a_reader_and_a_writer {
         {
             let file = std::fs::File::create(&path).expect("a file");
             before
-                .write(&mut FromStd::new(file))
+                .unload_to(&mut FromStd::new(file))
                 .expect("a write to disk");
         }
 
@@ -202,7 +202,7 @@ mod through_a_reader_and_a_writer {
         );
 
         let file = std::fs::File::open(&path).expect("the file back");
-        let back = LinearTable::<u64, String>::read(&mut FromStd::new(file)).expect("a read");
+        let back = LinearTable::<u64, String>::load_from(&mut FromStd::new(file)).expect("a read");
         assert_eq!(back.rows(), before.rows());
         let _ = std::fs::remove_file(&path);
     }
@@ -224,7 +224,7 @@ mod through_a_reader_and_a_writer {
 
         {
             let file = std::fs::File::create(&path).expect("a file");
-            first.write(&mut FromStd::new(file)).expect("a write");
+            first.unload_to(&mut FromStd::new(file)).expect("a write");
         }
         let after_first = std::fs::metadata(&path).expect("a stat").len();
 
@@ -234,7 +234,7 @@ mod through_a_reader_and_a_writer {
                 .open(&path)
                 .expect("the file, to append");
             whole
-                .append(&mut FromStd::new(file), 2_000)
+                .append_to(&mut FromStd::new(file), 2_000)
                 .expect("an append");
         }
         let after_append = std::fs::metadata(&path).expect("a stat").len();
@@ -244,7 +244,7 @@ mod through_a_reader_and_a_writer {
         );
 
         let file = std::fs::File::open(&path).expect("the file back");
-        let back = LinearTable::<u64, String>::read(&mut FromStd::new(file)).expect("a read");
+        let back = LinearTable::<u64, String>::load_from(&mut FromStd::new(file)).expect("a read");
         assert_eq!(back.rows(), whole.rows());
         let _ = std::fs::remove_file(&path);
     }
@@ -255,8 +255,8 @@ mod through_a_reader_and_a_writer {
     fn a_half_written_page_is_torn_rather_than_ignored() {
         let bytes = table(5_000).unload();
         let cut = bytes.len() - (PAGE_SIZE / 2);
-        match LinearTable::<u64, String>::read(&mut &bytes[..cut]) {
-            Err(ReadError::Torn { .. }) => {}
+        match LinearTable::<u64, String>::load_from(&mut &bytes[..cut]) {
+            Err(HydrateError::Torn { .. }) => {}
             other => panic!("a half written page has to be caught: {other:?}"),
         }
     }
