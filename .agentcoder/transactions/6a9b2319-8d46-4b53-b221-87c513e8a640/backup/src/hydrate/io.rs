@@ -114,7 +114,7 @@ where
     let mut index = 0;
 
     while fill(source, &mut page, index)? {
-        rows.append(&mut page_rows(&page, index, &mut schema)?);
+        rows.append_to(&mut page_rows(&page, index, &mut schema)?);
         index += 1;
     }
 
