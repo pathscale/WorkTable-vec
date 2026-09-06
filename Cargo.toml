@@ -14,13 +14,28 @@ categories = ["data-structures"]
 default = []
 # Load and unload rows as pages. Optional because it is the only thing here
 # that needs a serializer.
-hydrate = ["dep:rkyv"]
+hydrate = ["dep:rkyv", "dep:embedded-io"]
 arctic = ["dep:arctic"]
 congee = ["dep:congee"]
 wti = ["dep:wti"]
 
 [dependencies]
 rkyv = { version = "0.8.17", default-features = false, features = ["alloc", "bytecheck"], optional = true }
+# The I/O is a trait, not a filesystem. `embedded-io` already implements it for
+# `&[u8]` and `Vec<u8>`, and `embedded-io-adapters` wraps a `std::fs::File`, so
+# a caller with an OS gets real files and a caller without one plugs in whatever
+# it has. Nothing here needs `std` either way.
+embedded-io = { version = "0.7", default-features = false, features = ["alloc"], optional = true }
 arctic = { package = "arctic-wt", version = "^0.1, >=0.1.9", optional = true }
 congee = { package = "congee-wt", version = "^0.4, >=0.4.4", optional = true }
 wti = { package = "WorkTablesIndex", version = "^0.0, >=0.0.11", optional = true, default-features = false, features = ["concurrent"] }
+
+[dev-dependencies]
+# Only the tests need a real file, and this is what turns one into the trait.
+embedded-io-adapters = { version = "0.7", features = ["std"] }
+rkyv = { version = "0.8.17", features = ["alloc", "bytecheck"] }
+
+[[example]]
+name = "disk_cost"
+# It measures the page codec, so it needs it.
+required-features = ["hydrate"]
