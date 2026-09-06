@@ -66,15 +66,23 @@ use crate::{IndexedTable, LinearTable};
 /// One page, header included.
 pub const PAGE_SIZE: usize = 4096 * 4;
 
-/// The fixed header every page opens with.
-pub const HEADER_SIZE: usize = 24;
+/// DataBucket's `GENERAL_HEADER_SIZE`, which this page opens with.
+pub const HEADER_SIZE: usize = 28;
 
-/// How much of a page is body.
-pub const BODY_SIZE: usize = PAGE_SIZE - HEADER_SIZE;
+/// The row directory at the page tail: a row count and a CRC-32.
+pub const DIRECTORY_SIZE: usize = 8;
 
-/// Bumped when the page layout changes, so an older file is refused rather than
-/// read through the new shape.
-pub const PAGE_VERSION: u32 = 1;
+/// How much of a page is body, between the header and the directory.
+pub const BODY_SIZE: usize = PAGE_SIZE - HEADER_SIZE - DIRECTORY_SIZE;
+
+/// `DATA_VERSION` 3: DataBucket's page framing, plus a row directory.
+///
+/// 2 is what WorkTable writes today, and a 2 page has no directory, so a reader
+/// cannot find its rows without the index. 3 says the directory is there.
+pub const PAGE_VERSION: u32 = 3;
+
+/// `PageType::Data` in DataBucket's enum.
+const PAGE_TYPE_DATA: u32 = 2;
 
 /// What a load can refuse on.
 ///
@@ -285,25 +293,42 @@ fn crc32(bytes: &[u8]) -> u32 {
     !crc
 }
 
-/// A page header: six little-endian `u32`s, in this order.
+/// DataBucket's `GeneralHeader`, byte for byte.
 ///
-/// Every one of them is checked on the way back in. A field that is written and
-/// never validated is worse than a field that does not exist, because it reads
-/// like a guarantee.
+/// Seven little-endian `u32`s in declaration order, which is what
+/// `rkyv::to_bytes` of that struct actually produces: no relative pointers, and
+/// `page_type` padded from `u16` to four bytes. Verified against
+/// `data_bucket 0.5.7`, which for a `Data` page of space 3, id 7, previous 6,
+/// next 8, length `0x11223344` emits:
+///
+/// ```text
+/// 02000000 03000000 07000000 06000000 08000000 02000000 44332211
+/// version  space    page     previous next     type     length
+/// ```
+///
+/// It is reproduced here rather than imported because `data_bucket` is `std`
+/// (tokio for file access, eyre through its signatures) and this crate is not.
+/// **That is a real duplication and the risk that comes with it is a layout
+/// drifting apart in two places**, which is why the bytes above are written
+/// down and `the_header_matches_databuckets_layout` checks them.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct Header {
+    /// `DATA_VERSION`. See [`PAGE_VERSION`].
     version: u32,
-    /// The row type every page in a run carries.
+    /// Carries the row type fingerprint rather than a space id.
+    ///
+    /// A `Vec<(K, V)>` belongs to no space, and the field is a `u32` sitting in
+    /// the right place, so it holds the one identity these pages do have. A
+    /// WorkTable reader will see a space id it does not recognise, which is the
+    /// honest outcome: these are not its rows.
     schema: u32,
-    /// How many rows this page's archive holds.
-    rows: u32,
-    /// How many bytes of that archive are in this page.
+    page: u32,
+    previous: u32,
+    next: u32,
+    /// `PageType::Data`, which is 2.
+    page_type: u32,
+    /// Bytes of row archive in this page, before the directory.
     body: u32,
-    /// CRC-32 over exactly `body` bytes.
-    crc: u32,
-    /// Zero for now. A layout change that needs a flag has somewhere to put it
-    /// without moving anything else.
-    flags: u32,
 }
 
 impl Header {
@@ -311,10 +336,11 @@ impl Header {
         for field in [
             self.version,
             self.schema,
-            self.rows,
+            self.page,
+            self.previous,
+            self.next,
+            self.page_type,
             self.body,
-            self.crc,
-            self.flags,
         ] {
             out.extend_from_slice(&field.to_le_bytes());
         }
@@ -329,10 +355,49 @@ impl Header {
         Self {
             version: at(0),
             schema: at(1),
-            rows: at(2),
-            body: at(3),
-            crc: at(4),
-            flags: at(5),
+            page: at(2),
+            previous: at(3),
+            next: at(4),
+            page_type: at(5),
+            body: at(6),
+        }
+    }
+}
+
+/// The row directory, at the tail of every page.
+///
+/// **This is the slotted part.** The header is DataBucket's and has nowhere to
+/// say how many rows a page holds, which is exactly the gap that makes a
+/// WorkTable data page unreadable without its index. Putting the count in the
+/// page means the page describes itself.
+///
+/// Eight bytes at the very end: the row count, then a CRC-32 of the body. The
+/// checksum lives here rather than in the header for the same reason the count
+/// does, and because a header this crate did not design has no spare field for
+/// it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Directory {
+    rows: u32,
+    crc: u32,
+}
+
+impl Directory {
+    fn write(self, page: &mut [u8]) {
+        let at = page.len() - DIRECTORY_SIZE;
+        page[at..at + 4].copy_from_slice(&self.rows.to_le_bytes());
+        page[at + 4..].copy_from_slice(&self.crc.to_le_bytes());
+    }
+
+    fn read(page: &[u8]) -> Self {
+        let at = page.len() - DIRECTORY_SIZE;
+        let word = |n: usize| {
+            let mut bytes = [0u8; 4];
+            bytes.copy_from_slice(&page[n..n + 4]);
+            u32::from_le_bytes(bytes)
+        };
+        Self {
+            rows: word(at),
+            crc: word(at + 4),
         }
     }
 }
@@ -415,17 +480,30 @@ where
         hint = take;
         let archive = rest[..take].to_vec().encode();
         let body = archive.as_ref();
+        let page = u32::try_from(out.len() / PAGE_SIZE).expect("a page index inside u32");
+        let last = rest.len() == take;
         Header {
             version: PAGE_VERSION,
             schema,
-            rows: u32::try_from(take).expect("a row count inside u32"),
+            page,
+            previous: page.saturating_sub(1),
+            // A last page points at itself, so a chain walker stops rather than
+            // running off the end.
+            next: if last { page } else { page + 1 },
+            page_type: PAGE_TYPE_DATA,
             body: u32::try_from(body.len()).expect("a body inside u32"),
-            crc: crc32(body),
-            flags: 0,
         }
         .write(&mut out);
         out.extend_from_slice(body);
         out.resize(out.len().next_multiple_of(PAGE_SIZE), 0);
+
+        // The directory goes in last, into the tail of the page just written.
+        let start = out.len() - PAGE_SIZE;
+        Directory {
+            rows: u32::try_from(take).expect("a row count inside u32"),
+            crc: crc32(body),
+        }
+        .write(&mut out[start..]);
 
         rest = &rest[take..];
         if rest.is_empty() {
@@ -468,27 +546,28 @@ where
             claimed: take,
         });
     }
+    let directory = Directory::read(raw);
     let body = &raw[HEADER_SIZE..HEADER_SIZE + take];
     let found = crc32(body);
-    if found != header.crc {
+    if found != directory.crc {
         return Err(LoadError::Corrupt {
             page: index,
-            expected: header.crc,
+            expected: directory.crc,
             found,
         });
     }
 
     // Copied into an AlignedVec because rkyv reads an archive in place and
-    // needs it aligned. A page body sits at offset 24 in a Vec<u8>, which is
-    // aligned to nothing in particular.
+    // needs it aligned. A page body sits at a header's offset into a Vec<u8>,
+    // which is aligned to nothing in particular.
     let mut aligned = AlignedVec::<16>::with_capacity(take);
     aligned.extend_from_slice(body);
     let rows =
         Vec::<(K, V)>::decode(&aligned).map_err(|NotAnArchive| LoadError::Rows { page: index })?;
-    if rows.len() != header.rows as usize {
+    if rows.len() != directory.rows as usize {
         return Err(LoadError::RowCount {
             page: index,
-            expected: header.rows as usize,
+            expected: directory.rows as usize,
             found: rows.len(),
         });
     }
