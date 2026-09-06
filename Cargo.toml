@@ -12,11 +12,19 @@ categories = ["data-structures"]
 
 [features]
 default = []
+# Load and unload rows as DataBucket data pages. Optional because it is the
+# only thing here that reaches outside the crate for a format.
+hydrate = ["dep:data_bucket_format", "dep:rkyv"]
 arctic = ["dep:arctic"]
 congee = ["dep:congee"]
 wti = ["dep:wti"]
 
 [dependencies]
+# Path, not crates.io: data_bucket_format is new and unpublished, so this
+# branch cannot merge until it ships. Nothing else here depends on a
+# working checkout.
+data_bucket_format = { path = "../DataBucket/format", default-features = false, optional = true }
+rkyv = { version = "0.8.17", default-features = false, features = ["alloc", "bytecheck"], optional = true }
 arctic = { package = "arctic-wt", version = "^0.1, >=0.1.9", optional = true }
 congee = { package = "congee-wt", version = "^0.4, >=0.4.4", optional = true }
 wti = { package = "WorkTablesIndex", version = "^0.0, >=0.0.11", optional = true, default-features = false, features = ["concurrent"] }
