@@ -7,13 +7,17 @@
 //! with a stable contract so database comparisons use identical rows.
 
 #![no_std]
+// The crate is no_std. Tests link std so they can put a page run on a real
+// disk, which is the only way to show the traits reach one.
+#[cfg(test)]
+extern crate std;
 
 extern crate alloc;
 
 #[cfg(feature = "hydrate")]
 mod hydrate;
 #[cfg(feature = "hydrate")]
-pub use hydrate::{Codec, LoadError};
+pub use hydrate::{Codec, LoadError, ReadError};
 
 use alloc::collections::BTreeMap;
 #[cfg(feature = "congee")]
