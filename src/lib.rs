@@ -10,6 +10,11 @@
 
 extern crate alloc;
 
+#[cfg(feature = "hydrate")]
+mod hydrate;
+#[cfg(feature = "hydrate")]
+pub use hydrate::{Codec, LoadError};
+
 use alloc::collections::BTreeMap;
 #[cfg(feature = "congee")]
 use alloc::sync::Arc;
