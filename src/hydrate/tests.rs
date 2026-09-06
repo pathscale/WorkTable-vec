@@ -135,9 +135,12 @@ fn damage_stays_inside_the_page_it_happened_to() {
 #[test]
 fn a_row_count_that_disagrees_with_the_body_is_refused() {
     let mut bytes = table(64).unload();
-    // Claim one more row than the body holds, and fix nothing else.
-    let rows = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]);
-    bytes[8..12].copy_from_slice(&(rows + 1).to_le_bytes());
+    // Claim one more row than the body holds, and fix nothing else. The count
+    // is in the directory at the page tail, not in the header, because the
+    // header is DataBucket's and has no field for it.
+    let at = PAGE_SIZE - DIRECTORY_SIZE;
+    let rows = u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
+    bytes[at..at + 4].copy_from_slice(&(rows + 1).to_le_bytes());
     match LinearTable::<u64, String>::load(&bytes) {
         Err(LoadError::RowCount { page: 0, .. }) => {}
         other => panic!("a lying row count has to be caught: {other:?}"),
@@ -260,4 +263,79 @@ mod through_a_reader_and_a_writer {
             other => panic!("a half written page has to be caught: {other:?}"),
         }
     }
+}
+
+/// The header is DataBucket's `GeneralHeader`, byte for byte.
+///
+/// Verified against `data_bucket 0.5.7`, which for a `Data` page of space 3,
+/// id 7, previous 6, next 8, length `0x11223344` emits exactly these 28 bytes.
+/// This crate reproduces that layout rather than importing it, because
+/// `data_bucket` is `std`. **A duplicated layout drifts**, and this is what
+/// notices when it does.
+#[test]
+fn the_header_is_databuckets_layout() {
+    let mut out = Vec::new();
+    Header {
+        version: 2,
+        schema: 3,
+        page: 7,
+        previous: 6,
+        next: 8,
+        page_type: PAGE_TYPE_DATA,
+        body: 0x1122_3344,
+    }
+    .write(&mut out);
+
+    assert_eq!(out.len(), HEADER_SIZE, "GENERAL_HEADER_SIZE is 28");
+    assert_eq!(
+        out,
+        alloc::vec![
+            0x02, 0x00, 0x00, 0x00, // data_version
+            0x03, 0x00, 0x00, 0x00, // space_id, here the row fingerprint
+            0x07, 0x00, 0x00, 0x00, // page_id
+            0x06, 0x00, 0x00, 0x00, // previous_id
+            0x08, 0x00, 0x00, 0x00, // next_id
+            0x02, 0x00, 0x00, 0x00, // page_type: Data
+            0x44, 0x33, 0x22, 0x11, // data_length
+        ],
+        "the layout drifted from data_bucket 0.5.7"
+    );
+}
+
+/// A page says how many rows it holds, which is what a WorkTable data page
+/// cannot do and why one cannot be read without its index.
+#[test]
+fn every_page_declares_its_own_rows() {
+    let before = table(20_000);
+    let bytes = before.unload();
+    let pages = bytes.len() / PAGE_SIZE;
+    assert!(pages > 2, "need several pages: {pages}");
+
+    let mut counted = 0usize;
+    for page in bytes.chunks_exact(PAGE_SIZE) {
+        let at = PAGE_SIZE - DIRECTORY_SIZE;
+        let mut word = [0u8; 4];
+        word.copy_from_slice(&page[at..at + 4]);
+        counted += u32::from_le_bytes(word) as usize;
+    }
+    assert_eq!(
+        counted,
+        before.len(),
+        "the pages account for every row without an index"
+    );
+}
+
+/// Version 3 is the version that has a directory. A page claiming 2 is a
+/// WorkTable page, and its rows are not where this reader would look.
+#[test]
+fn a_version_two_page_is_refused() {
+    let mut bytes = table(4).unload();
+    bytes[0..4].copy_from_slice(&2u32.to_le_bytes());
+    assert_eq!(
+        LinearTable::<u64, String>::load(&bytes),
+        Err(LoadError::ForeignPages {
+            page: 0,
+            version: 2
+        })
+    );
 }
