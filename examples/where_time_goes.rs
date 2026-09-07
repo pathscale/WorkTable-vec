@@ -20,7 +20,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             format!("row {n} with enough text to be worth serializing"),
         );
     }
-    let bytes = table.unload();
+    let bytes = table.unload()?;
     let pages = bytes.len() / PAGE_SIZE;
 
     let mut whole = Vec::new();

@@ -204,6 +204,34 @@ impl core::fmt::Display for LoadError {
 
 impl core::error::Error for LoadError {}
 
+/// The one thing an unload can refuse on.
+///
+/// A page body is [`BODY_SIZE`] bytes and a row is written whole, so a row
+/// whose archive does not fit one cannot be written at all. It is a refusal
+/// rather than a spill because a page that carries part of a row stops
+/// standing alone, which is the property the format exists for.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RowTooLarge {
+    /// Which row, counting from the first one written.
+    pub row: usize,
+    /// How many bytes its archive needed.
+    pub bytes: usize,
+    /// How many a page body holds.
+    pub limit: usize,
+}
+
+impl core::fmt::Display for RowTooLarge {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let Self { row, bytes, limit } = self;
+        write!(
+            formatter,
+            "row {row} archives to {bytes} bytes and a page body holds {limit}"
+        )
+    }
+}
+
+impl core::error::Error for RowTooLarge {}
+
 /// What a row set has to be able to do to make the trip.
 ///
 /// The bounds are rkyv's and there are five lines of them, so they are stated
@@ -461,7 +489,7 @@ where
 }
 
 /// Rows to pages, each page standing alone.
-pub(crate) fn to_pages<K, V>(rows: &[(K, V)], schema: u32) -> Vec<u8>
+pub(crate) fn to_pages<K, V>(rows: &[(K, V)], schema: u32) -> Result<Vec<u8>, RowTooLarge>
 where
     Vec<(K, V)>: Codec,
     (K, V): Clone,
@@ -480,6 +508,18 @@ where
         hint = take;
         let archive = rest[..take].to_vec().encode();
         let body = archive.as_ref();
+        // `rows_per_page` returns at least one so the loop always advances, so
+        // a body over the limit means that one row does not fit a page. It is
+        // caught here rather than written, because the writer used to produce
+        // a file `load` then refused: `unload` reported success and the rows
+        // were gone.
+        if body.len() > BODY_SIZE {
+            return Err(RowTooLarge {
+                row: rows.len() - rest.len(),
+                bytes: body.len(),
+                limit: BODY_SIZE,
+            });
+        }
         let page = u32::try_from(out.len() / PAGE_SIZE).expect("a page index inside u32");
         let last = rest.len() == take;
         Header {
@@ -510,7 +550,7 @@ where
             break;
         }
     }
-    out
+    Ok(out)
 }
 
 /// One page back into rows, with every header field checked.
@@ -601,8 +641,11 @@ where
     (K, V): Clone,
 {
     /// Every row, as pages.
-    #[must_use]
-    pub fn unload(&self) -> Vec<u8> {
+    ///
+    /// # Errors
+    ///
+    /// Refuses a row whose archive does not fit one page body.
+    pub fn unload(&self) -> Result<Vec<u8>, RowTooLarge> {
         to_pages(&self.rows, fingerprint::<Vec<(K, V)>>())
     }
 
@@ -611,8 +654,11 @@ where
     ///
     /// Appending is possible at all because pages stand alone: the existing
     /// file is untouched and these pages are simply more of them.
-    #[must_use]
-    pub fn unload_appending(&self, first: usize) -> Vec<u8> {
+    ///
+    /// # Errors
+    ///
+    /// Refuses a row whose archive does not fit one page body.
+    pub fn unload_appending(&self, first: usize) -> Result<Vec<u8>, RowTooLarge> {
         let first = first.min(self.rows.len());
         to_pages(&self.rows[first..], fingerprint::<Vec<(K, V)>>())
     }
@@ -643,14 +689,20 @@ where
     /// The index is not written. It is derived from the rows, so rebuilding it
     /// on load costs one pass, where storing it would cost bytes at rest and a
     /// second thing that can disagree with the rows.
-    #[must_use]
-    pub fn unload(&self) -> Vec<u8> {
+    ///
+    /// # Errors
+    ///
+    /// Refuses a row whose archive does not fit one page body.
+    pub fn unload(&self) -> Result<Vec<u8>, RowTooLarge> {
         to_pages(&self.rows, fingerprint::<Vec<(K, V)>>())
     }
 
     /// The rows from `first` on, as pages.
-    #[must_use]
-    pub fn unload_appending(&self, first: usize) -> Vec<u8> {
+    ///
+    /// # Errors
+    ///
+    /// Refuses a row whose archive does not fit one page body.
+    pub fn unload_appending(&self, first: usize) -> Result<Vec<u8>, RowTooLarge> {
         let first = first.min(self.rows.len());
         to_pages(&self.rows[first..], fingerprint::<Vec<(K, V)>>())
     }
@@ -671,7 +723,7 @@ where
 }
 
 mod io;
-pub use io::HydrateError;
+pub use io::{HydrateError, UnloadError};
 
 #[cfg(test)]
 mod tests;
