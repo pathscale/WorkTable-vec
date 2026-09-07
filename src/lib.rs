@@ -596,9 +596,9 @@ mod tests {
 ///
 /// No removal, no resize, and no iteration order beyond slot order. A full table refuses rather
 /// than growing, and [`AtomicKeyTable::len`] says how many slots are taken so a caller can
-/// see it coming. Keys are `u64` and zero is the empty sentinel, so a caller whose key is a
-/// pointer or a hash maps it in. `usize` rather than `u64` because `AtomicU64` does not exist
-/// on 32-bit bare-metal targets such as `thumbv7em-none-eabi`, and this crate builds for them.
+/// see it coming. Keys are `usize`, the same width as the slot arithmetic that indexes them,
+/// and zero is the empty sentinel, so a caller whose key is a pointer, a hash or a `u64` maps
+/// it in.
 /// Scatter a key across the table.
 ///
 /// # Why not the low bits, and why not a modulo

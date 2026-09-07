@@ -14,7 +14,7 @@ categories = ["data-structures"]
 default = []
 # On by default for nobody: this crate is `#![no_std]` and the core never needed
 # `std`. The feature exists so a backend that does need one can say so, and so a
-# bare-metal caller can prove it is not getting one.
+# caller without a standard library can prove it is not getting one.
 std = ["arctic?/std"]
 # Load and unload rows as pages. Optional because it is the only thing here
 # that needs a serializer.
