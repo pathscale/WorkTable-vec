@@ -31,7 +31,7 @@ use alloc::vec::Vec;
 
 use embedded_io::{Read, Write};
 
-use super::{Codec, LoadError, PAGE_SIZE, fingerprint, page_rows, to_pages};
+use super::{Codec, LoadError, PAGE_SIZE, RowTooLarge, fingerprint, page_rows, to_pages};
 use crate::{IndexedTable, LinearTable};
 
 /// A read that failed, either at the transport or at the page.
@@ -77,6 +77,36 @@ impl<E: core::fmt::Display> core::fmt::Display for HydrateError<E> {
 }
 
 impl<E: core::fmt::Debug + core::fmt::Display> core::error::Error for HydrateError<E> {}
+
+/// A write that failed, either at the transport or at the rows.
+///
+/// The mirror of [`HydrateError`], and split for the same reason: a sink that
+/// would not take the bytes and a row that cannot be written at all are
+/// different problems.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UnloadError<E> {
+    /// The writer failed.
+    Io(E),
+    /// The rows could not be made into pages.
+    Row(RowTooLarge),
+}
+
+impl<E> From<RowTooLarge> for UnloadError<E> {
+    fn from(error: RowTooLarge) -> Self {
+        Self::Row(error)
+    }
+}
+
+impl<E: core::fmt::Display> core::fmt::Display for UnloadError<E> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Io(error) => write!(formatter, "the writer failed: {error}"),
+            Self::Row(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl<E: core::fmt::Debug + core::fmt::Display> core::error::Error for UnloadError<E> {}
 
 /// Fill `page` from `source`, or say how far it got.
 ///
@@ -140,10 +170,11 @@ where
     ///
     /// # Errors
     ///
-    /// Whatever the writer reports.
-    pub fn unload_to<W: Write>(&self, sink: &mut W) -> Result<(), W::Error> {
-        sink.write_all(&to_pages(&self.rows, fingerprint::<Vec<(K, V)>>()))?;
-        sink.flush()
+    /// Whatever the writer reports, or a row too large for a page.
+    pub fn unload_to<W: Write>(&self, sink: &mut W) -> Result<(), UnloadError<W::Error>> {
+        let pages = to_pages(&self.rows, fingerprint::<Vec<(K, V)>>())?;
+        sink.write_all(&pages).map_err(UnloadError::Io)?;
+        sink.flush().map_err(UnloadError::Io)
     }
 
     /// Write the rows from `first` on, for a sink already holding the rest.
@@ -153,14 +184,19 @@ where
     ///
     /// # Errors
     ///
-    /// Whatever the writer reports.
-    pub fn append_to<W: Write>(&self, sink: &mut W, first: usize) -> Result<(), W::Error> {
+    /// Whatever the writer reports, or a row too large for a page.
+    pub fn append_to<W: Write>(
+        &self,
+        sink: &mut W,
+        first: usize,
+    ) -> Result<(), UnloadError<W::Error>> {
         let first = first.min(self.rows.len());
         if first == self.rows.len() {
-            return sink.flush();
+            return sink.flush().map_err(UnloadError::Io);
         }
-        sink.write_all(&to_pages(&self.rows[first..], fingerprint::<Vec<(K, V)>>()))?;
-        sink.flush()
+        let pages = to_pages(&self.rows[first..], fingerprint::<Vec<(K, V)>>())?;
+        sink.write_all(&pages).map_err(UnloadError::Io)?;
+        sink.flush().map_err(UnloadError::Io)
     }
 
     /// Read a table back from a reader.
@@ -188,10 +224,11 @@ where
     ///
     /// # Errors
     ///
-    /// Whatever the writer reports.
-    pub fn unload_to<W: Write>(&self, sink: &mut W) -> Result<(), W::Error> {
-        sink.write_all(&to_pages(&self.rows, fingerprint::<Vec<(K, V)>>()))?;
-        sink.flush()
+    /// Whatever the writer reports, or a row too large for a page.
+    pub fn unload_to<W: Write>(&self, sink: &mut W) -> Result<(), UnloadError<W::Error>> {
+        let pages = to_pages(&self.rows, fingerprint::<Vec<(K, V)>>())?;
+        sink.write_all(&pages).map_err(UnloadError::Io)?;
+        sink.flush().map_err(UnloadError::Io)
     }
 
     /// Read a table back from a reader, rebuilding the index.

@@ -12,7 +12,8 @@ fn table(rows: usize) -> LinearTable<u64, String> {
 #[test]
 fn rows_survive_the_round_trip() {
     let before = table(1_000);
-    let back = LinearTable::<u64, String>::load(&before.unload()).expect("a load");
+    let back = LinearTable::<u64, String>::load(&before.unload().expect("rows that fit a page"))
+        .expect("a load");
     assert_eq!(back.rows(), before.rows());
 }
 
@@ -20,7 +21,7 @@ fn rows_survive_the_round_trip() {
 #[test]
 fn rows_survive_spanning_many_pages() {
     let before = table(20_000);
-    let bytes = before.unload();
+    let bytes = before.unload().expect("rows that fit a page");
     assert!(
         bytes.len() / PAGE_SIZE > 1,
         "the fixture has to span pages: {} pages",
@@ -32,7 +33,7 @@ fn rows_survive_spanning_many_pages() {
 
 #[test]
 fn an_empty_table_is_one_page_and_comes_back_empty() {
-    let bytes = table(0).unload();
+    let bytes = table(0).unload().expect("rows that fit a page");
     assert_eq!(bytes.len(), PAGE_SIZE);
     assert!(
         LinearTable::<u64, String>::load(&bytes)
@@ -47,7 +48,8 @@ fn the_index_is_rebuilt_rather_than_stored() {
     for n in 0..500u64 {
         before.insert(n, n.to_string()).expect("a row");
     }
-    let back = IndexedTable::<u64, String>::load(&before.unload()).expect("a load");
+    let back = IndexedTable::<u64, String>::load(&before.unload().expect("rows that fit a page"))
+        .expect("a load");
     assert_eq!(back.len(), 500);
     assert_eq!(back.select(&37), Some(&"37".to_string()));
 }
@@ -78,7 +80,7 @@ fn a_zeroed_page_is_not_an_empty_table() {
 /// succeeds and hands back debris.
 #[test]
 fn a_different_row_type_is_refused_rather_than_reinterpreted() {
-    let bytes = table(10).unload();
+    let bytes = table(10).unload().expect("rows that fit a page");
     assert_eq!(
         LinearTable::<u64, u64>::load(&bytes),
         Err(LoadError::ForeignRows {
@@ -91,10 +93,10 @@ fn a_different_row_type_is_refused_rather_than_reinterpreted() {
 /// Two files spliced together are not one longer file.
 #[test]
 fn pages_from_two_runs_are_refused() {
-    let mut spliced = table(1).unload();
+    let mut spliced = table(1).unload().expect("rows that fit a page");
     let mut other: LinearTable<u64, u64> = LinearTable::new();
     other.push(1, 1);
-    spliced.extend_from_slice(&other.unload());
+    spliced.extend_from_slice(&other.unload().expect("rows that fit a page"));
     assert_eq!(
         LinearTable::<u64, String>::load(&spliced),
         Err(LoadError::Inconsistent { page: 1 })
@@ -106,7 +108,7 @@ fn pages_from_two_runs_are_refused() {
 /// only the checksum notices.
 #[test]
 fn a_flipped_bit_in_a_body_is_caught_by_the_checksum() {
-    let mut bytes = table(64).unload();
+    let mut bytes = table(64).unload().expect("rows that fit a page");
     bytes[HEADER_SIZE + 40] ^= 0b0000_0100;
     match LinearTable::<u64, String>::load(&bytes) {
         Err(LoadError::Corrupt { page: 0, .. }) => {}
@@ -119,7 +121,7 @@ fn a_flipped_bit_in_a_body_is_caught_by_the_checksum() {
 #[test]
 fn damage_stays_inside_the_page_it_happened_to() {
     let before = table(20_000);
-    let bytes = before.unload();
+    let bytes = before.unload().expect("rows that fit a page");
     let pages = bytes.len() / PAGE_SIZE;
     assert!(pages > 2, "need a middle page to damage: {pages}");
 
@@ -134,7 +136,7 @@ fn damage_stays_inside_the_page_it_happened_to() {
 
 #[test]
 fn a_row_count_that_disagrees_with_the_body_is_refused() {
-    let mut bytes = table(64).unload();
+    let mut bytes = table(64).unload().expect("rows that fit a page");
     // Claim one more row than the body holds, and fix nothing else. The count
     // is in the directory at the page tail, not in the header, because the
     // header is DataBucket's and has no field for it.
@@ -156,8 +158,8 @@ fn appended_pages_read_back_as_one_table() {
     for (key, value) in whole.rows().iter().take(2_000).cloned() {
         first.push(key, value);
     }
-    bytes.extend_from_slice(&first.unload());
-    bytes.extend_from_slice(&whole.unload_appending(2_000));
+    bytes.extend_from_slice(&first.unload().expect("rows that fit a page"));
+    bytes.extend_from_slice(&whole.unload_appending(2_000).expect("rows that fit a page"));
 
     let back = LinearTable::<u64, String>::load(&bytes).expect("a load");
     assert_eq!(back.rows(), whole.rows());
@@ -256,7 +258,7 @@ mod through_a_reader_and_a_writer {
     /// rather than quietly dropping the rows it did not finish.
     #[test]
     fn a_half_written_page_is_torn_rather_than_ignored() {
-        let bytes = table(5_000).unload();
+        let bytes = table(5_000).unload().expect("rows that fit a page");
         let cut = bytes.len() - (PAGE_SIZE / 2);
         match LinearTable::<u64, String>::load_from(&mut &bytes[..cut]) {
             Err(HydrateError::Torn { .. }) => {}
@@ -307,7 +309,7 @@ fn the_header_is_databuckets_layout() {
 #[test]
 fn every_page_declares_its_own_rows() {
     let before = table(20_000);
-    let bytes = before.unload();
+    let bytes = before.unload().expect("rows that fit a page");
     let pages = bytes.len() / PAGE_SIZE;
     assert!(pages > 2, "need several pages: {pages}");
 
@@ -329,7 +331,7 @@ fn every_page_declares_its_own_rows() {
 /// WorkTable page, and its rows are not where this reader would look.
 #[test]
 fn a_version_two_page_is_refused() {
-    let mut bytes = table(4).unload();
+    let mut bytes = table(4).unload().expect("rows that fit a page");
     bytes[0..4].copy_from_slice(&2u32.to_le_bytes());
     assert_eq!(
         LinearTable::<u64, String>::load(&bytes),
@@ -338,4 +340,73 @@ fn a_version_two_page_is_refused() {
             version: 2
         })
     );
+}
+
+/// A row that does not fit a page is refused, rather than written into a file
+/// that cannot be read back.
+///
+/// This is a regression. The writer used to hand such a row a page of its own,
+/// spilling past the page boundary; `load` then stopped at
+/// `Overlong`, so `unload` reported success and every row in the file was
+/// unreachable. A 20 KB row wrote 32,768 bytes and lost one row; a 30 KB row
+/// among a hundred ordinary ones lost all hundred and one.
+#[test]
+fn a_row_too_large_for_a_page_is_refused() {
+    let mut table = LinearTable::<u64, String>::new();
+    table.push(0, "x".repeat(20_000));
+    let refusal = table
+        .unload()
+        .expect_err("a row that big cannot be written");
+    assert_eq!(refusal.row, 0);
+    assert_eq!(refusal.limit, BODY_SIZE);
+    assert!(
+        refusal.bytes > BODY_SIZE,
+        "the refusal reports the archive size it could not place: {refusal}"
+    );
+}
+
+/// The refusal names the row, not just the fact of one.
+#[test]
+fn the_refusal_names_which_row_is_too_large() {
+    let mut table = table(50);
+    table.push(999, "y".repeat(30_000));
+    for n in 1_000..1_050u64 {
+        table.push(n, "z".repeat(100));
+    }
+    let refusal = table
+        .unload()
+        .expect_err("a row that big cannot be written");
+    assert_eq!(refusal.row, 50, "{refusal}");
+}
+
+/// The limit is a page body, and a row just under it still writes.
+///
+/// Both sides are asserted so the boundary is pinned from both directions: a
+/// check that only ever refuses would pass with the limit set to zero.
+#[test]
+fn the_limit_is_a_page_body_and_not_less() {
+    let mut fits = LinearTable::<u64, String>::new();
+    fits.push(0, "x".repeat(BODY_SIZE - 64));
+    let bytes = fits.unload().expect("a row just under the limit fits");
+    let back = LinearTable::<u64, String>::load(&bytes).expect("a load");
+    assert_eq!(back.rows(), fits.rows());
+
+    let mut over = LinearTable::<u64, String>::new();
+    over.push(0, "x".repeat(BODY_SIZE + 1));
+    assert!(over.unload().is_err(), "a row over the limit is refused");
+}
+
+/// A refused unload writes nothing at all.
+///
+/// The refusal happens while the pages are being built, before the sink is
+/// touched, so a caller who ignores the error still does not end up with a
+/// half-written file.
+#[test]
+fn a_refused_unload_leaves_the_sink_untouched() {
+    let mut table = LinearTable::<u64, String>::new();
+    table.push(0, "x".repeat(20_000));
+    let mut sink = alloc::vec::Vec::new();
+    let refusal = table.unload_to(&mut sink).expect_err("nothing to write");
+    assert!(matches!(refusal, UnloadError::Row(_)), "{refusal}");
+    assert!(sink.is_empty(), "{} bytes reached the sink", sink.len());
 }
