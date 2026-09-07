@@ -50,3 +50,6 @@ required-features = ["hydrate"]
 [[example]]
 name = "where_time_goes"
 required-features = ["hydrate"]
+
+[[example]]
+name = "query_shapes"
