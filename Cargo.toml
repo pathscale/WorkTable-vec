@@ -35,7 +35,7 @@ embedded-io = { version = "0.7", default-features = false, features = ["alloc"],
 # possible: before it, `smr-ps-reclaim` forced `std` on.
 arctic = { package = "arctic-wt", version = "^0.1, >=0.1.11", optional = true, default-features = false, features = ["smr-ps-reclaim"] }
 congee = { package = "congee-wt", version = "^0.4, >=0.4.4", optional = true }
-wti = { package = "WorkTablesIndex", version = "^0.0, >=0.0.11", optional = true, default-features = false, features = ["concurrent"] }
+wti = { package = "WorkTablesIndex", version = "^0.0, >=0.0.12", optional = true, default-features = false, features = ["concurrent"] }
 
 [dev-dependencies]
 # Only the tests need a real file, and this is what turns one into the trait.
