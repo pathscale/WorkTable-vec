@@ -599,6 +599,14 @@ mod tests {
 /// see it coming. Keys are `usize`, the same width as the slot arithmetic that indexes them,
 /// and zero is the empty sentinel, so a caller whose key is a pointer, a hash or a `u64` maps
 /// it in.
+// A 64-bit `usize`, and it refuses rather than assuming one. `GOLDEN` below is
+// a 64-bit constant, and truncating it to 32 bits leaves an even number, which
+// is not invertible and quietly collapses keys onto the same slot. Nothing here
+// is built or tested for a narrower target, so the honest answer is to say so
+// at compile time instead of carrying a second constant nobody exercises.
+#[cfg(not(target_pointer_width = "64"))]
+compile_error!("worktable-vec's AtomicKeyTable requires a 64-bit target");
+
 /// Scatter a key across the table.
 ///
 /// # Why not the low bits, and why not a modulo
@@ -614,12 +622,8 @@ mod tests {
 /// power-of-two capacity fixes the second: the index is then a mask.
 #[inline(always)]
 const fn scatter(key: usize, shift: u32, mask: usize) -> usize {
-    // 2^BITS / phi, odd so the multiply is invertible and no input is lost.
-    const GOLDEN: usize = if usize::BITS == 64 {
-        0x9E37_79B9_7F4A_7C15u64 as usize
-    } else {
-        0x9E37_79B9u32 as usize
-    };
+    // 2^64 / phi, odd so the multiply is invertible and no input is lost.
+    const GOLDEN: usize = 0x9E37_79B9_7F4A_7C15u64 as usize;
     (key.wrapping_mul(GOLDEN) >> shift) & mask
 }
 #[derive(Debug)]
