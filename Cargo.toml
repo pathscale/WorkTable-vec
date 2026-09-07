@@ -15,13 +15,13 @@ default = []
 # On by default for nobody: this crate is `#![no_std]` and the core never needed
 # `std`. The feature exists so a backend that does need one can say so, and so a
 # caller without a standard library can prove it is not getting one.
-std = ["arctic?/std"]
+std = ["arctic?/std", "congee?/std", "wti?/std"]
 # Load and unload rows as pages. Optional because it is the only thing here
 # that needs a serializer.
 hydrate = ["dep:rkyv", "dep:embedded-io"]
 arctic = ["dep:arctic"]
-congee = ["dep:congee", "std"]
-wti = ["dep:wti", "std"]
+congee = ["dep:congee"]
+wti = ["dep:wti"]
 
 [dependencies]
 rkyv = { version = "0.8.17", default-features = false, features = ["alloc", "bytecheck"], optional = true }
@@ -34,8 +34,8 @@ embedded-io = { version = "0.7", default-features = false, features = ["alloc"],
 # does not silently enable `std`. 0.1.11 is the first release where that is
 # possible: before it, `smr-ps-reclaim` forced `std` on.
 arctic = { package = "arctic-wt", version = "0.1.11", optional = true, default-features = false, features = ["smr-ps-reclaim"] }
-congee = { package = "congee-wt", version = "0.4.4", optional = true }
-wti = { package = "WorkTablesIndex", version = "0.0.12", optional = true, default-features = false, features = ["concurrent"] }
+congee = { package = "congee-wt", version = "0.4.5", optional = true, default-features = false }
+wti = { package = "WorkTablesIndex", version = "0.0.13", optional = true, default-features = false, features = ["concurrent"] }
 
 [dev-dependencies]
 # Only the tests need a real file, and this is what turns one into the trait.
