@@ -13,6 +13,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+          targets: x86_64-unknown-none
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets --no-default-features -- -D warnings
@@ -21,6 +22,19 @@ jobs:
       - run: cargo test --all-targets --features arctic
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test --all-targets --all-features
+      # A crate that says `#![no_std]` and is only ever built on a host with one
+      # proves nothing. This target has no `std` to find.
+      - run: cargo build --target x86_64-unknown-none --no-default-features
+      - run: cargo build --target x86_64-unknown-none --no-default-features --features hydrate
+      # The arctic backend needs an OS for its thread-local storage, so it
+      # cannot be built for a bare target - but it must still not pull `std` in.
+      - name: The arctic backend does not enable std
+        run: |
+          graph=$(cargo tree --no-default-features --features arctic -f '{p} [{f}]')
+          echo "$graph" | grep -E 'arctic-wt|ps-reclaim'
+          if echo "$graph" | grep -E '(arctic-wt|ps-reclaim) v[^[]*\[[^]]*std'; then
+            echo "std leaked into the arctic backend"; exit 1
+          fi
 
   package:
     name: Release dry run
