@@ -39,3 +39,7 @@ rkyv = { version = "0.8.17", features = ["alloc", "bytecheck"] }
 name = "disk_cost"
 # It measures the page codec, so it needs it.
 required-features = ["hydrate"]
+
+[[example]]
+name = "where_time_goes"
+required-features = ["hydrate"]

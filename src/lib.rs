@@ -17,7 +17,7 @@ extern crate alloc;
 #[cfg(feature = "hydrate")]
 mod hydrate;
 #[cfg(feature = "hydrate")]
-pub use hydrate::{Codec, HydrateError, LoadError};
+pub use hydrate::{Codec, HydrateError, LoadError, PAGE_SIZE};
 
 use alloc::collections::BTreeMap;
 #[cfg(feature = "congee")]
