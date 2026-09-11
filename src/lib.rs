@@ -1,3 +1,19 @@
+//! **Deprecated. Use `worktable` instead.**
+//!
+//! New table development lives in WorkTable 1.9.0-alpha1. Existing releases
+//! remain available for callers and historical benchmark baselines.
+//!
+//! | here | there |
+//! |---|---|
+//! | Vec storage and index choices | `worktable!` with `vec: true` and explicit `using` choices; the generated row API is not source-compatible with the old generic tables |
+//! | `AtomicKeyTable` | `worktable::atomic_key_table::AtomicKeyTable`, identical, with the snapshot question answered in its documentation |
+//! | the `hydrate` feature's page codec | `worktable::vec_hydrate`, reached through `unload`, `unload_appending` and `load`; callers own byte I/O |
+//!
+//! Snapshot format 3 requires regeneration or an old-reader export. WorkTable
+//! does not generate the old embedded-I/O convenience methods. Freestanding
+//! callers must check its documented no-default-features dependency boundary
+//! before migrating. This notice does not publish or yank a crate version.
+//!
 //! Explicit, non-concurrent `Vec`-backed table baselines.
 //!
 //! This crate isolates the storage pattern applications otherwise tend to
