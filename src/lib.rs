@@ -1,3 +1,18 @@
+//! **Deprecated. Use `worktable` instead.**
+//!
+//! Everything here now lives in `worktable`, and the last thing that did not,
+//! `AtomicKeyTable`, was ported there. Nothing in this crate is maintained.
+//!
+//! | here | there |
+//! |---|---|
+//! | `LinearTable`, `IndexedTable`, `ArcticTable` | `worktable!` with `vec: true`, whose `using` clause picks the same backends |
+//! | `AtomicKeyTable` | `worktable::atomic_key_table::AtomicKeyTable`, identical, with the snapshot question answered in its documentation |
+//! | the `hydrate` feature's page codec | `worktable::vec_hydrate`, reached through `unload` and `load` on any `vec: true` table |
+//!
+//! The crate is left published rather than yanked. Yanking does not delete and
+//! would break anyone pinned to it for no gain; this notice is the whole of
+//! what a reader needs.
+//!
 //! Explicit, non-concurrent `Vec`-backed table baselines.
 //!
 //! This crate isolates the storage pattern applications otherwise tend to

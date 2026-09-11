@@ -1,5 +1,19 @@
 # WorkTable-vec
 
+> **Deprecated. Use [`worktable`](https://github.com/pathscale/WorkTable) instead.**
+>
+> Everything here lives in `worktable` now, and the last piece that did not,
+> `AtomicKeyTable`, has been ported. Nothing in this crate is maintained.
+>
+> | here | there |
+> |---|---|
+> | `LinearTable`, `IndexedTable`, `ArcticTable` | `worktable!` with `vec: true`, whose `using` clause picks the same backends |
+> | `AtomicKeyTable` | `worktable::atomic_key_table::AtomicKeyTable` |
+> | the `hydrate` feature | `worktable::vec_hydrate`, through `unload` and `load` |
+>
+> It stays published rather than yanked: yanking does not delete, and it would
+> break anyone pinned to it for nothing.
+
 Tiny, explicit `Vec`-backed tables for WorkTable-shaped workloads.
 
 Applications often grow an implicit table out of a `Vec` plus bespoke scans
