@@ -33,9 +33,9 @@ embedded-io = { version = "0.7", default-features = false, features = ["alloc"],
 # `default-features = false` and an explicit SMR backend, so enabling `arctic`
 # does not silently enable `std`. 0.1.11 is the first release where that is
 # possible: before it, `smr-ps-reclaim` forced `std` on.
-arctic = { package = "arctic-wt", version = "0.1.11", optional = true, default-features = false, features = ["smr-ps-reclaim"] }
+arctic = { package = "arctic-wt", version = "^0.1", optional = true, default-features = false, features = ["smr-ps-reclaim"] }
 congee = { package = "congee-wt", version = "^0.4", optional = true, default-features = false }
-wti = { package = "WorkTablesIndex", version = "0.0.13", optional = true, default-features = false, features = ["concurrent"] }
+wti = { package = "WorkTablesIndex", version = "^0.0", optional = true, default-features = false, features = ["concurrent"] }
 
 [dev-dependencies]
 # Only the tests need a real file, and this is what turns one into the trait.
