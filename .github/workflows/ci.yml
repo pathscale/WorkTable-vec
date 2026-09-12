@@ -58,7 +58,8 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
-          version=$(sed -nE 's/^version = "([^"]+)"$/\1/p' Cargo.toml | head -1)
+          set -eu
+          version=$(cargo read-manifest | jq -er '.version')
           if cargo info "worktable-vec@$version" --registry crates-io >/dev/null 2>&1; then
             echo "worktable-vec $version is already on crates.io; nothing to publish"
             exit 0
