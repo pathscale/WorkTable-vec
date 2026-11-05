@@ -1,10 +1,12 @@
-# Security review follow-ups
+# Security review disposition: WorkTable-vec retirement
 
-These source-owned follow-ups come from a local static review dated 2026-10-14. The review is historical evidence, not proof about current master. Every item remains **unverified** until its source anchor is rechecked. This summary omits exploit sequences, credential values, and local paths.
+The four findings below originated in the 2026-10-14 static review. I rechecked the cited current source on 2026-11-05. The code behaviors remain present; none was repaired by this review. The owner disposition is `RETIRED_REPO`: this crate is deprecated in favor of WorkTable, and this repository receives no security fix or release change in this task. The retirement notice is in [README.md](../../README.md) and at the top of `src/lib.rs`.
 
-| Review ID | Source anchor | Required invariant | Status |
-|---|---|---|---|
-| WTV-1 | .github/workflows/ci.yml (publish job, lines 54-73) | Publishing credentials must be absent during dependency verification; release inputs must be pinned. | Unverified against current master; confirm before closing. |
-| WTV-2 | src/hydrate/io.rs (read_rows), src/hydrate/mod.rs (from_pages) | Untrusted loading must offer explicit byte, row, and page limits. | Unverified against current master; confirm before closing. |
-| WTV-3 | src/hydrate/mod.rs (IndexedTable::load), src/hydrate/io.rs region (IndexedTable::load_from, let _ = table.insert(..)) | All table loaders must report duplicate keys consistently instead of dropping rows. | Unverified against current master; confirm before closing. |
-| WTV-4 | src/lib.rs (scatter), shift computed at src/lib.rs | Single-slot key-table operations must avoid shifting by the integer width. | Unverified against current master; confirm before closing. |
+| Finding | Current-source evidence | Status and migration condition |
+|---|---|---|
+| WTV-1 — publishing credential scope and mutable action references | `.github/workflows/ci.yml`, `publish` job | The current workflow declares only `workflow_dispatch`, while `publish` is gated on a `push` to `master`; that job is unreachable through the configured trigger. Its token environment and mutable action references remain in source. Before any future release-path change, the release owner must review credential scope and pinning. No release or yank was performed. |
+| WTV-2 — loaders have no configurable total byte, page, or row limits | `hydrate::io::read_rows`; `hydrate::from_pages` | Unresolved here. During migration, confirm the maintained loader has limits suitable for untrusted inputs; track any missing implementation in WorkTable. |
+| WTV-3 — indexed loaders ignore insertion results for duplicate keys | `IndexedTable::load_from`; `IndexedTable::load` | Unresolved here. During migration, confirm and document consistent duplicate-key behavior in WorkTable. |
+| WTV-4 — one-slot `AtomicKeyTable` computes a shift equal to the machine word width | `scatter`; `AtomicKeyTable::with_capacity` | Unresolved here. During migration, confirm the maintained single-slot table handles lookup and update safely. |
+
+The source recheck was static only: no build, test, workflow, compiler, or runtime validation was performed. Do not describe the findings as fixed. The retirement decision preserves existing published versions for compatibility; it does not establish that old versions are safe. See [TODO.md](../TODO.md) for the remaining consumer-migration work.
